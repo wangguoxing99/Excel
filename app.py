@@ -171,15 +171,65 @@ def split_smart_algo(total_qty, days, is_int):
 
 @app.route('/api/splitter/analyze', methods=['POST'])
 def splitter_analyze():
+    """
+    分析上传的文件，获取 Sheet 列表和列名。
+    包含修复：自动过滤隐藏的 Sheet。
+    """
     file = request.files.get('file')
     if not file: return jsonify({"error": "未找到文件"}), 400
+    
     try:
-        xl = pd.ExcelFile(file)
-        sheets = xl.sheet_names
-        df = xl.parse(sheets[0], nrows=10)
-        return jsonify({"sheets": sheets, "columns": df.columns.tolist()})
+        # 1. 将文件读入内存，防止多次读取导致指针偏移
+        file_content = file.read()
+        file_bytes = io.BytesIO(file_content)
+        
+        visible_sheets = []
+        filename = file.filename.lower() if file.filename else ""
+        
+        # 2. 针对 .xlsx 文件，尝试使用 openpyxl 检测隐藏 Sheet
+        if filename.endswith('.xlsx'):
+            try:
+                from openpyxl import load_workbook
+                # read_only=True 模式加载速度更快
+                wb = load_workbook(file_bytes, read_only=True)
+                for sheet in wb.worksheets:
+                    # sheet_state 默认是 'visible'，隐藏则是 'hidden' 或 'veryHidden'
+                    if sheet.sheet_state == 'visible':
+                        visible_sheets.append(sheet.title)
+                wb.close()
+            except Exception as e:
+                print(f"检测隐藏Sheet失败，将显示所有Sheet: {e}")
+                visible_sheets = []
+
+        # 重置文件指针给 Pandas 使用
+        file_bytes.seek(0)
+        
+        # 3. 使用 Pandas 读取所有 Sheet 名称
+        xl = pd.ExcelFile(file_bytes)
+        all_sheets = xl.sheet_names
+        
+        # 4. 过滤逻辑
+        if visible_sheets:
+            # 取交集：既在 Pandas 能读到的列表里，又是可见的
+            final_sheets = [s for s in all_sheets if s in visible_sheets]
+        else:
+            # 如果不是 xlsx 或检测失败，则显示所有
+            final_sheets = all_sheets
+            
+        # 如果过滤完没东西了，保底显示所有
+        if not final_sheets:
+            final_sheets = all_sheets
+
+        # 5. 读取第一个可见 Sheet 的列名
+        df = xl.parse(final_sheets[0], nrows=10)
+        
+        return jsonify({
+            "sheets": final_sheets, 
+            "columns": df.columns.tolist()
+        })
+        
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"解析错误: {str(e)}"}), 500
 
 @app.route('/api/splitter/sheet_info', methods=['POST'])
 def splitter_sheet_info():
@@ -331,3 +381,6 @@ def compare_download(filename):
     # 处理中文文件名下载
     response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(display_name)}"
     return response
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>工具门户</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 min-h-screen flex flex-col items-center justify-center">
+    <div class="mb-10 text-center">
+        <h1 class="text-4xl font-bold text-slate-800">企业数据处理工具箱</h1>
+        <p class="text-slate-500 mt-2">欢迎, {{ session.get('user') }} | <a href="/logout" class="text-red-500 hover:underline">注销</a></p>
+    </div>
+    
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl w-full px-4">
+        <a href="/tool/splitter" class="group block bg-white p-8 rounded-2xl shadow-lg hover:shadow-2xl transition-all border-l-8 border-blue-500">
+            <h2 class="text-2xl font-bold text-slate-800 mb-2 group-hover:text-blue-600">Excel 智能拆分系统</h2>
+            <p class="text-slate-500">自动化采购报表拆分，支持随机算法与整数判定。</p>
+        </a>
+
+        <a href="/tool/compare" class="group block bg-white p-8 rounded-2xl shadow-lg hover:shadow-2xl transition-all border-l-8 border-indigo-500">
+            <h2 class="text-2xl font-bold text-slate-800 mb-2 group-hover:text-indigo-600">进销项智能比对系统</h2>
+            <p class="text-slate-500">自动比对进项与销项 Excel，计算数量与金额差异。</p>
+        </a>
+    </div>
+</body>
+</html>

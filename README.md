@@ -72,3 +72,13 @@ docker run -d -p 5000:5000 --name my-tools data-tools
 
 # 示例：将用户重置为 admin，密码重置为 123456
 docker exec -it my-tools flask reset-user admin 123456
+
+多用户管理
+1. 添加新用户 (或修改现有用户密码)
+docker exec -it my-tools flask add-user zhangsan 888888
+
+2. 删除用户
+docker exec -it my-tools flask del-user lisi
+
+3. 查看所有用户列表
+docker exec -it my-tools flask list-users

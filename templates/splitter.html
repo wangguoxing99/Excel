@@ -7,21 +7,80 @@
 </head>
 <body class="bg-slate-100 min-h-screen py-10">
     <div class="max-w-6xl mx-auto px-4 mb-4">
-        <a href="/" class="text-blue-600 hover:underline font-bold">← 返回主门户</a>
+        <a href="/" class="text-blue-600 hover:underline font-bold flex items-center">
+            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+            返回主门户
+        </a>
     </div>
+
     <div class="max-w-6xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
         <div class="lg:col-span-8 bg-white rounded-3xl shadow-xl overflow-hidden">
-             <form id="mainForm" class="p-8 space-y-10">
-                 <input type="file" id="fileInput" name="file" class="block w-full ..." onchange="initFile()">
-                 </form>
+            <div class="bg-blue-600 p-6">
+                <h1 class="text-2xl font-bold text-white">Excel 智能拆分专家 v3.0</h1>
+                <p class="text-blue-100 text-sm opacity-80">支持多Sheet选定及基准列手动指定</p>
+            </div>
+
+            <form id="mainForm" class="p-8 space-y-10">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
+                    <div class="space-y-2">
+                        <label class="text-sm font-bold text-slate-600">第一步：上传文件</label>
+                        <input type="file" id="fileInput" name="file" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" onchange="initFile()">
+                    </div>
+                    <div id="sheetContainer" class="hidden space-y-2">
+                        <label class="text-sm font-bold text-slate-600">第二步：选择工作表 (Sheet)</label>
+                        <select id="sheetSelect" name="sheet_name" class="w-full p-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 focus:ring-blue-400" onchange="loadSheetInfo()"></select>
+                    </div>
+                </div>
+
+                <div id="dynamicConfig" class="hidden space-y-10 animate-fade-in">
+                    <div class="bg-yellow-50 p-6 rounded-2xl border border-yellow-100">
+                        <label class="block text-slate-800 font-bold mb-4 flex items-center">
+                            <span class="bg-yellow-500 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] mr-2">!</span>
+                            第三步：指定【数量基准列】（以此列进行拆分）
+                        </label>
+                        <div id="qtyColGrid" class="flex flex-wrap gap-3"></div>
+                    </div>
+
+                    <div class="space-y-4">
+                        <label class="block text-slate-800 font-bold">第四步：勾选需要保留输出的列 (最多10项)</label>
+                        <div id="colGrid" class="grid grid-cols-2 md:grid-cols-4 gap-2 bg-slate-50 p-4 rounded-xl border"></div>
+                    </div>
+
+                    <div class="space-y-4">
+                        <label class="block text-slate-800 font-bold">第五步：勾选需要【整数拆分】的单位</label>
+                        <div id="unitGrid" class="grid grid-cols-2 md:grid-cols-5 gap-2 bg-green-50 p-4 rounded-xl border border-green-100"></div>
+                    </div>
+
+                    <div class="flex items-center justify-between border-t pt-8">
+                        <div class="w-40">
+                            <label class="block text-xs font-bold text-slate-400 uppercase mb-2">拆分天数</label>
+                            <input type="number" name="days" value="12" class="w-full px-4 py-2 bg-slate-100 rounded-lg font-bold">
+                        </div>
+                        <button type="button" onclick="executeTask()" class="px-10 py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg hover:bg-blue-700 transform hover:scale-105 transition-all">执行拆分并导出</button>
+                    </div>
+                </div>
+            </form>
         </div>
+
         <div class="lg:col-span-4 space-y-6">
-             <div id="logPanel" class="...">...</div>
+            <div class="bg-slate-900 rounded-3xl p-6 shadow-2xl h-[600px] flex flex-col">
+                <div class="flex items-center justify-between mb-4 border-b border-slate-800 pb-4">
+                    <span class="text-blue-400 font-mono text-xs">SYSTEM MONITOR</span>
+                    <div class="flex space-x-1">
+                        <div class="w-2 h-2 rounded-full bg-red-500"></div>
+                        <div class="w-2 h-2 rounded-full bg-yellow-500"></div>
+                        <div class="w-2 h-2 rounded-full bg-green-500"></div>
+                    </div>
+                </div>
+                <div id="logPanel" class="flex-1 font-mono text-[11px] overflow-y-auto space-y-2 text-slate-400">
+                    <p class="text-slate-600">>> 等待文件载入...</p>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
-        // ... 原日志函数 ...
         function log(msg, color='text-slate-400') {
             const panel = document.getElementById('logPanel');
             panel.innerHTML += `<p class="${color}">> [${new Date().toLocaleTimeString()}] ${msg}</p>`;
@@ -36,56 +95,77 @@
             const formData = new FormData();
             formData.append('file', file);
             
-            // 【修改点1】 API 路径变更
-            const resp = await fetch('/api/splitter/analyze', { method: 'POST', body: formData });
-            const data = await resp.json();
-            
-            if(data.sheets) {
-                const select = document.getElementById('sheetSelect');
-                select.innerHTML = data.sheets.map(s => `<option value="${s}">${s}</option>`).join('');
-                document.getElementById('sheetContainer').classList.remove('hidden');
-                loadSheetInfo();
+            try {
+                // 【关键修复】路径改为 /api/splitter/analyze
+                const resp = await fetch('/api/splitter/analyze', { method: 'POST', body: formData });
+                if (!resp.ok) throw new Error(`HTTP error! status: ${resp.status}`);
+                const data = await resp.json();
+                
+                if(data.sheets) {
+                    const select = document.getElementById('sheetSelect');
+                    select.innerHTML = data.sheets.map(s => `<option value="${s}">${s}</option>`).join('');
+                    document.getElementById('sheetContainer').classList.remove('hidden');
+                    loadSheetInfo();
+                } else if (data.error) {
+                    log("错误: " + data.error, "text-red-500");
+                }
+            } catch (e) {
+                log("上传失败: " + e.message, "text-red-500");
             }
         }
 
         async function loadSheetInfo() {
             const file = document.getElementById('fileInput').files[0];
             const sheetName = document.getElementById('sheetSelect').value;
-            
+            log(`加载工作表: ${sheetName}...`);
+
             const formData = new FormData();
             formData.append('file', file);
             formData.append('sheet_name', sheetName);
 
-            // 【修改点2】 API 路径变更
-            const resp = await fetch('/api/splitter/sheet_info', { method: 'POST', body: formData });
-            const data = await resp.json();
+            try {
+                // 【关键修复】路径改为 /api/splitter/sheet_info
+                const resp = await fetch('/api/splitter/sheet_info', { method: 'POST', body: formData });
+                if (!resp.ok) throw new Error(`HTTP error! status: ${resp.status}`);
+                const data = await resp.json();
 
-            // ... 渲染逻辑保持不变 ...
-            const qtyGrid = document.getElementById('qtyColGrid');
-            qtyGrid.innerHTML = data.columns.map(c => `
-                <label class="flex items-center px-3 py-2 bg-white border rounded-full cursor-pointer hover:bg-yellow-100 transition-colors">
-                    <input type="radio" name="target_qty_col" value="${c}" class="mr-2" ${c.includes('数量')?'checked':''}>
-                    <span class="text-xs font-medium text-slate-700">${c}</span>
-                </label>
-            `).join('');
+                if (data.error) {
+                    log("读取Sheet失败: " + data.error, "text-red-500");
+                    return;
+                }
 
-            const colGrid = document.getElementById('colGrid');
-            colGrid.innerHTML = data.columns.map(c => `
-                <label class="flex items-center p-2 hover:bg-blue-50 rounded-lg text-xs cursor-pointer">
-                    <input type="checkbox" name="cols" value="${c}" class="mr-2" onchange="limitChecks(this, 10)">
-                    <span class="truncate">${c}</span>
-                </label>
-            `).join('');
+                // 渲染数量基准列选择（单选）
+                const qtyGrid = document.getElementById('qtyColGrid');
+                qtyGrid.innerHTML = data.columns.map(c => `
+                    <label class="flex items-center px-3 py-2 bg-white border rounded-full cursor-pointer hover:bg-yellow-100 transition-colors">
+                        <input type="radio" name="target_qty_col" value="${c}" class="mr-2" ${c.includes('数量')?'checked':''}>
+                        <span class="text-xs font-medium text-slate-700">${c}</span>
+                    </label>
+                `).join('');
 
-            const unitGrid = document.getElementById('unitGrid');
-            unitGrid.innerHTML = data.units.map(u => `
-                <label class="flex items-center p-2 hover:bg-green-100 rounded-lg text-xs cursor-pointer">
-                    <input type="checkbox" name="int_units" value="${u}" class="mr-2">
-                    <span>${u}</span>
-                </label>
-            `).join('');
-            
-            document.getElementById('dynamicConfig').classList.remove('hidden');
+                // 渲染保留列
+                const colGrid = document.getElementById('colGrid');
+                colGrid.innerHTML = data.columns.map(c => `
+                    <label class="flex items-center p-2 hover:bg-blue-50 rounded-lg text-xs cursor-pointer">
+                        <input type="checkbox" name="cols" value="${c}" class="mr-2" onchange="limitChecks(this, 10)">
+                        <span class="truncate">${c}</span>
+                    </label>
+                `).join('');
+
+                // 渲染单位
+                const unitGrid = document.getElementById('unitGrid');
+                unitGrid.innerHTML = data.units.map(u => `
+                    <label class="flex items-center p-2 hover:bg-green-100 rounded-lg text-xs cursor-pointer">
+                        <input type="checkbox" name="int_units" value="${u}" class="mr-2">
+                        <span>${u}</span>
+                    </label>
+                `).join('');
+
+                document.getElementById('dynamicConfig').classList.remove('hidden');
+                log(`解析成功！发现 ${data.columns.length} 列, ${data.units.length} 个唯一单位`, 'text-green-400');
+            } catch (e) {
+                log("获取Sheet信息失败: " + e.message, "text-red-500");
+            }
         }
 
         function limitChecks(el, max) {
@@ -97,19 +177,27 @@
             const form = document.getElementById('mainForm');
             const formData = new FormData(form);
             
-            // 【修改点3】 API 路径变更
+            if(!formData.get('target_qty_col')) { log("错误: 必须指定数量基准列", "text-red-500"); return; }
+            if(document.querySelectorAll('input[name="cols"]:checked').length === 0) { log("错误: 未勾选保留列", "text-red-500"); return; }
+
             log("核心拆分算法启动...", "text-blue-400");
-            const resp = await fetch('/api/splitter/process', { method: 'POST', body: formData });
-            if(resp.ok) {
-                const blob = await resp.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `拆分结果_${Date.now()}.xlsx`;
-                a.click();
-                log("任务完成，已导出。", "text-green-500");
-            } else {
-                log("后端处理异常。", "text-red-500");
+            try {
+                // 【关键修复】路径改为 /api/splitter/process
+                const resp = await fetch('/api/splitter/process', { method: 'POST', body: formData });
+                if(resp.ok) {
+                    const blob = await resp.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `拆分结果_${Date.now()}.xlsx`;
+                    a.click();
+                    log("任务圆满完成，正在导出数据包。", "text-green-500");
+                } else {
+                    const errText = await resp.text();
+                    log("后端处理异常: " + errText, "text-red-500");
+                }
+            } catch (e) {
+                log("请求失败: " + e.message, "text-red-500");
             }
         }
     </script>

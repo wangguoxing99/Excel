@@ -18,7 +18,7 @@
         <div class="lg:col-span-8 bg-white rounded-3xl shadow-xl overflow-hidden">
             <div class="bg-blue-600 p-6">
                 <h1 class="text-2xl font-bold text-white">Excel 智能拆分专家 v3.0</h1>
-                <p class="text-blue-100 text-sm opacity-80">支持多Sheet选定及基准列手动指定</p>
+                <p class="text-blue-100 text-sm opacity-80">自定义 A * B = C 逻辑 | 精准同步拆分</p>
             </div>
 
             <form id="mainForm" class="p-8 space-y-10">
@@ -34,12 +34,32 @@
                 </div>
 
                 <div id="dynamicConfig" class="hidden space-y-10 animate-fade-in">
-                    <div class="bg-yellow-50 p-6 rounded-2xl border border-yellow-100">
-                        <label class="block text-slate-800 font-bold mb-4 flex items-center">
-                            <span class="bg-yellow-500 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] mr-2">!</span>
-                            第三步：指定【数量基准列】（以此列进行拆分）
+                    
+                    <div class="bg-blue-50 p-6 rounded-2xl border border-blue-100">
+                        <label class="block text-slate-800 font-bold mb-4 flex items-center text-lg">
+                            <span class="bg-blue-600 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">3</span>
+                            配置核心计算逻辑 (A × B = C)
                         </label>
-                        <div id="qtyColGrid" class="flex flex-wrap gap-3"></div>
+                        <p class="text-xs text-slate-500 mb-4 ml-8">系统将拆分【A列】，并根据公式自动更新【C列】，【B列】保持单价不变。</p>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 ml-2">
+                            <div class="space-y-1">
+                                <label class="text-xs font-bold text-slate-500">A (数量基准列)</label>
+                                <select id="colSelectA" name="col_a" class="w-full p-2 bg-white border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-400 outline-none text-sm"></select>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-xs font-bold text-slate-500">B (单价/乘数列)</label>
+                                <select id="colSelectB" name="col_b" class="w-full p-2 bg-white border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-400 outline-none text-sm">
+                                    <option value="">(可选) 不指定</option>
+                                </select>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-xs font-bold text-slate-500">C (金额/结果列)</label>
+                                <select id="colSelectC" name="col_c" class="w-full p-2 bg-white border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-400 outline-none text-sm">
+                                    <option value="">(可选) 不指定</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="space-y-4">
@@ -106,9 +126,7 @@
         }
 
         async function initFile() {
-            // 每次新文件时隐藏之前的下载按钮
             document.getElementById('resultSection').classList.add('hidden');
-            
             const file = document.getElementById('fileInput').files[0];
             if(!file) return;
             log(`已选择文件: ${file.name}`, 'text-blue-400');
@@ -148,14 +166,39 @@
                 return;
             }
 
-            const qtyGrid = document.getElementById('qtyColGrid');
-            qtyGrid.innerHTML = data.columns.map(c => `
-                <label class="flex items-center px-3 py-2 bg-white border rounded-full cursor-pointer hover:bg-yellow-100 transition-colors">
-                    <input type="radio" name="target_qty_col" value="${c}" class="mr-2" ${c.includes('数量')?'checked':''}>
-                    <span class="text-xs font-medium text-slate-700">${c}</span>
-                </label>
-            `).join('');
+            // --- 渲染 A, B, C 选择器 ---
+            const columns = data.columns;
+            
+            // 辅助函数：生成选项 HTML
+            const createOptions = (cols, defaultText = "请选择") => {
+                let html = `<option value="">${defaultText}</option>`;
+                cols.forEach(c => html += `<option value="${c}">${c}</option>`);
+                return html;
+            };
 
+            // 渲染 A 列 (数量)
+            const selectA = document.getElementById('colSelectA');
+            selectA.innerHTML = createOptions(columns, "-- 选择数量列 (必选) --");
+            // 尝试自动选中包含“数量”的列
+            const autoQty = columns.find(c => c.includes('数量'));
+            if(autoQty) selectA.value = autoQty;
+
+            // 渲染 B 列 (单价)
+            const selectB = document.getElementById('colSelectB');
+            selectB.innerHTML = createOptions(columns, "-- 选择单价列 (可选) --");
+            // 尝试自动选中包含“单价”的列
+            const autoPrice = columns.find(c => c.includes('单价'));
+            if(autoPrice) selectB.value = autoPrice;
+
+            // 渲染 C 列 (金额)
+            const selectC = document.getElementById('colSelectC');
+            selectC.innerHTML = createOptions(columns, "-- 选择金额列 (可选) --");
+            // 尝试自动选中包含“金额”或“合计”的列
+            const autoTotal = columns.find(c => c.includes('金额') || c.includes('合计'));
+            if(autoTotal) selectC.value = autoTotal;
+
+
+            // 渲染保留列
             const colGrid = document.getElementById('colGrid');
             colGrid.innerHTML = data.columns.map(c => `
                 <label class="flex items-center p-2 hover:bg-blue-50 rounded-lg text-xs cursor-pointer">
@@ -164,6 +207,7 @@
                 </label>
             `).join('');
 
+            // 渲染单位
             const unitGrid = document.getElementById('unitGrid');
             unitGrid.innerHTML = data.units.map(u => `
                 <label class="flex items-center p-2 hover:bg-green-100 rounded-lg text-xs cursor-pointer">
@@ -173,7 +217,7 @@
             `).join('');
 
             document.getElementById('dynamicConfig').classList.remove('hidden');
-            log(`解析成功！发现 ${data.columns.length} 列`, 'text-green-400');
+            log(`解析成功！请配置 A*B=C 逻辑`, 'text-green-400');
         }
 
         function limitChecks(el, max) {
@@ -187,22 +231,22 @@
             const btn = document.getElementById('execBtn');
             const resultSection = document.getElementById('resultSection');
             
-            if(!formData.get('target_qty_col')) { log("错误: 必须指定数量基准列", "text-red-500"); return; }
+            // 校验逻辑
+            if(!formData.get('col_a')) { log("错误: 必须指定 A 列 (数量)", "text-red-500"); return; }
             if(document.querySelectorAll('input[name="cols"]:checked').length === 0) { log("错误: 未勾选保留列", "text-red-500"); return; }
 
-            // UI 状态更新：禁用按钮，隐藏上次结果
+            // UI 状态更新
             btn.disabled = true;
             btn.textContent = "处理中...";
             resultSection.classList.add('hidden');
 
-            log("核心拆分算法启动...", "text-blue-400");
+            log("启动 A*B=C 精准拆分算法...", "text-blue-400");
             try {
                 const resp = await fetch('/api/splitter/process', { method: 'POST', body: formData });
                 const data = await resp.json();
                 
                 if(data.success) {
                     log("任务圆满完成！已生成下载链接。", "text-green-500");
-                    // 显示下载按钮并设置链接
                     document.getElementById('downloadBtn').href = `/api/splitter/download/${data.filename}`;
                     resultSection.classList.remove('hidden');
                 } else {
@@ -211,7 +255,6 @@
             } catch (e) {
                 log("请求失败: " + e.message, "text-red-500");
             } finally {
-                // 恢复按钮状态
                 btn.disabled = false;
                 btn.textContent = "执行拆分任务";
             }

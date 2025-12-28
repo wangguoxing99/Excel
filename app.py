@@ -40,47 +40,88 @@ handler = WebLogHandler()
 handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', '%H:%M:%S'))
 logger.addHandler(handler)
 
-# --- 辅助函数 ---
+# --- 认证核心逻辑 (升级版) ---
 
-def save_auth_config(username, password):
-    """保存认证信息到文件"""
-    data = {
-        "username": username,
-        "password_hash": generate_password_hash(password)
-    }
+def load_auth_db():
+    """读取认证数据库，支持自动迁移旧格式"""
+    default_db = {"users": {}}
+    if not os.path.exists(AUTH_FILE):
+        return default_db
+    try:
+        with open(AUTH_FILE, 'r') as f:
+            data = json.load(f)
+            # 兼容迁移：如果是旧的单用户格式，转换为多用户格式
+            if "username" in data and "password_hash" in data:
+                new_db = {"users": {data["username"]: data["password_hash"]}}
+                save_auth_db(new_db) # 立即保存新格式
+                return new_db
+            return data
+    except:
+        return default_db
+
+def save_auth_db(data):
+    """保存认证数据库"""
     with open(AUTH_FILE, 'w') as f:
         json.dump(data, f)
 
-def load_auth_config():
-    """读取认证信息"""
-    if not os.path.exists(AUTH_FILE):
-        return None
-    try:
-        with open(AUTH_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        return None
+def add_user_logic(username, password):
+    """添加或更新用户"""
+    db = load_auth_db()
+    db["users"][username] = generate_password_hash(password)
+    save_auth_db(db)
 
-# --- CLI 命令 (控制台重置密码) ---
-@app.cli.command("reset-user")
+def del_user_logic(username):
+    """删除用户"""
+    db = load_auth_db()
+    if username in db["users"]:
+        del db["users"][username]
+        save_auth_db(db)
+        return True
+    return False
+
+# --- CLI 命令 (增强版) ---
+
+@app.cli.command("add-user")
 @click.argument("username")
 @click.argument("password")
-def reset_user_command(username, password):
-    """在控制台重置用户名和密码"""
-    save_auth_config(username, password)
-    click.echo(f"成功更新用户: {username}")
+def add_user_command(username, password):
+    """添加或更新用户: flask add-user <user> <pwd>"""
+    add_user_logic(username, password)
+    click.echo(f"✅ 用户已更新/添加: {username}")
+
+@app.cli.command("del-user")
+@click.argument("username")
+def del_user_command(username):
+    """删除用户: flask del-user <user>"""
+    if del_user_logic(username):
+        click.echo(f"🗑️ 用户已删除: {username}")
+    else:
+        click.echo(f"⚠️ 用户不存在: {username}")
+
+@app.cli.command("list-users")
+def list_users_command():
+    """列出所有用户"""
+    db = load_auth_db()
+    users = list(db["users"].keys())
+    click.echo(f"👥 当前用户列表: {', '.join(users)}")
 
 # --- 中间件 & 权限控制 ---
 
 @app.before_request
 def auth_middleware():
     if request.path.startswith('/static'): return
-    config = load_auth_config()
-    if not config:
+    
+    # 检查是否已初始化（至少有一个用户）
+    db = load_auth_db()
+    if not db["users"]:
         if request.endpoint != 'setup': return redirect(url_for('setup'))
         return
+    
+    # 如果已初始化但访问 setup，跳转登录
     if request.endpoint == 'setup': return redirect(url_for('login'))
+    
     if request.endpoint in ['login', 'logout']: return
+    
     session.permanent = True
     if not session.get('logged_in'): return redirect(url_for('login'))
 
@@ -88,11 +129,12 @@ def auth_middleware():
 
 @app.route('/setup', methods=['GET', 'POST'])
 def setup():
+    """初始化第一个管理员账号"""
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
         if username and password:
-            save_auth_config(username, password)
+            add_user_logic(username, password)
             return redirect(url_for('login'))
     return render_template('setup.html')
 
@@ -102,8 +144,11 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
-        config = load_auth_config()
-        if config and username == config['username'] and check_password_hash(config['password_hash'], password):
+        
+        db = load_auth_db()
+        user_hash = db["users"].get(username)
+        
+        if user_hash and check_password_hash(user_hash, password):
             session['logged_in'] = True
             session['user'] = username
             return redirect(url_for('portal'))
@@ -195,7 +240,6 @@ def splitter_sheet_info():
 
 @app.route('/api/splitter/process', methods=['POST'])
 def splitter_process():
-    # ... 参数获取 ...
     file = request.files.get('file')
     sheet_name = request.form.get('sheet_name')
     target_qty_col = request.form.get('target_qty_col')
@@ -205,7 +249,7 @@ def splitter_process():
     
     try:
         df = pd.read_excel(file, sheet_name=sheet_name)
-        if target_qty_col not in df.columns: return "指定的数量列不存在", 400
+        if target_qty_col not in df.columns: return jsonify({"success": False, "error": "指定的数量列不存在"}), 400
 
         name_col = next((c for c in df.columns if '名称' in str(c)), selected_cols[0] if selected_cols else df.columns[0])
         unit_col = next((c for c in df.columns if '单位' in str(c)), None)
@@ -238,7 +282,6 @@ def splitter_process():
                     except: pass
                 daily_rows[day_idx].append(new_row)
         
-        # --- 修改点：保存到磁盘而不是直接返回流 ---
         filename = f"拆分_{sheet_name}_{uuid.uuid4().hex[:8]}.xlsx"
         filepath = os.path.join(app.config['RESULT_FOLDER'], filename)
         
@@ -251,7 +294,6 @@ def splitter_process():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-# --- 新增下载路由 ---
 @app.route('/api/splitter/download/<filename>')
 def splitter_download(filename):
     return send_from_directory(app.config['RESULT_FOLDER'], filename, as_attachment=True)

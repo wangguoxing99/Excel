@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>高级 Excel 智能拆分系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 min-h-screen py-10">
+    <div class="max-w-6xl mx-auto px-4 mb-4">
+        <a href="/" class="text-blue-600 hover:underline font-bold">← 返回主门户</a>
+    </div>
+    <div class="max-w-6xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div class="lg:col-span-8 bg-white rounded-3xl shadow-xl overflow-hidden">
+             <form id="mainForm" class="p-8 space-y-10">
+                 <input type="file" id="fileInput" name="file" class="block w-full ..." onchange="initFile()">
+                 </form>
+        </div>
+        <div class="lg:col-span-4 space-y-6">
+             <div id="logPanel" class="...">...</div>
+        </div>
+    </div>
+
+    <script>
+        // ... 原日志函数 ...
+        function log(msg, color='text-slate-400') {
+            const panel = document.getElementById('logPanel');
+            panel.innerHTML += `<p class="${color}">> [${new Date().toLocaleTimeString()}] ${msg}</p>`;
+            panel.scrollTop = panel.scrollHeight;
+        }
+
+        async function initFile() {
+            const file = document.getElementById('fileInput').files[0];
+            if(!file) return;
+            log(`已选择文件: ${file.name}`, 'text-blue-400');
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // 【修改点1】 API 路径变更
+            const resp = await fetch('/api/splitter/analyze', { method: 'POST', body: formData });
+            const data = await resp.json();
+            
+            if(data.sheets) {
+                const select = document.getElementById('sheetSelect');
+                select.innerHTML = data.sheets.map(s => `<option value="${s}">${s}</option>`).join('');
+                document.getElementById('sheetContainer').classList.remove('hidden');
+                loadSheetInfo();
+            }
+        }
+
+        async function loadSheetInfo() {
+            const file = document.getElementById('fileInput').files[0];
+            const sheetName = document.getElementById('sheetSelect').value;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('sheet_name', sheetName);
+
+            // 【修改点2】 API 路径变更
+            const resp = await fetch('/api/splitter/sheet_info', { method: 'POST', body: formData });
+            const data = await resp.json();
+
+            // ... 渲染逻辑保持不变 ...
+            const qtyGrid = document.getElementById('qtyColGrid');
+            qtyGrid.innerHTML = data.columns.map(c => `
+                <label class="flex items-center px-3 py-2 bg-white border rounded-full cursor-pointer hover:bg-yellow-100 transition-colors">
+                    <input type="radio" name="target_qty_col" value="${c}" class="mr-2" ${c.includes('数量')?'checked':''}>
+                    <span class="text-xs font-medium text-slate-700">${c}</span>
+                </label>
+            `).join('');
+
+            const colGrid = document.getElementById('colGrid');
+            colGrid.innerHTML = data.columns.map(c => `
+                <label class="flex items-center p-2 hover:bg-blue-50 rounded-lg text-xs cursor-pointer">
+                    <input type="checkbox" name="cols" value="${c}" class="mr-2" onchange="limitChecks(this, 10)">
+                    <span class="truncate">${c}</span>
+                </label>
+            `).join('');
+
+            const unitGrid = document.getElementById('unitGrid');
+            unitGrid.innerHTML = data.units.map(u => `
+                <label class="flex items-center p-2 hover:bg-green-100 rounded-lg text-xs cursor-pointer">
+                    <input type="checkbox" name="int_units" value="${u}" class="mr-2">
+                    <span>${u}</span>
+                </label>
+            `).join('');
+            
+            document.getElementById('dynamicConfig').classList.remove('hidden');
+        }
+
+        function limitChecks(el, max) {
+            const checked = document.querySelectorAll(`input[name="cols"]:checked`);
+            if(checked.length > max) { el.checked = false; log(`警告: 最多保留 ${max} 列`, 'text-yellow-500'); }
+        }
+
+        async function executeTask() {
+            const form = document.getElementById('mainForm');
+            const formData = new FormData(form);
+            
+            // 【修改点3】 API 路径变更
+            log("核心拆分算法启动...", "text-blue-400");
+            const resp = await fetch('/api/splitter/process', { method: 'POST', body: formData });
+            if(resp.ok) {
+                const blob = await resp.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `拆分结果_${Date.now()}.xlsx`;
+                a.click();
+                log("任务完成，已导出。", "text-green-500");
+            } else {
+                log("后端处理异常。", "text-red-500");
+            }
+        }
+    </script>
+</body>
+</html>

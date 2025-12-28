@@ -40,7 +40,7 @@ handler = WebLogHandler()
 handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', '%H:%M:%S'))
 logger.addHandler(handler)
 
-# --- 认证核心逻辑 (升级版) ---
+# --- 认证核心逻辑 (多用户版) ---
 
 def load_auth_db():
     """读取认证数据库，支持自动迁移旧格式"""
@@ -53,7 +53,7 @@ def load_auth_db():
             # 兼容迁移：如果是旧的单用户格式，转换为多用户格式
             if "username" in data and "password_hash" in data:
                 new_db = {"users": {data["username"]: data["password_hash"]}}
-                save_auth_db(new_db) # 立即保存新格式
+                save_auth_db(new_db)
                 return new_db
             return data
     except:
@@ -79,7 +79,7 @@ def del_user_logic(username):
         return True
     return False
 
-# --- CLI 命令 (增强版) ---
+# --- CLI 命令 ---
 
 @app.cli.command("add-user")
 @click.argument("username")
@@ -111,7 +111,7 @@ def list_users_command():
 def auth_middleware():
     if request.path.startswith('/static'): return
     
-    # 检查是否已初始化（至少有一个用户）
+    # 检查是否已初始化
     db = load_auth_db()
     if not db["users"]:
         if request.endpoint != 'setup': return redirect(url_for('setup'))
@@ -129,7 +129,6 @@ def auth_middleware():
 
 @app.route('/setup', methods=['GET', 'POST'])
 def setup():
-    """初始化第一个管理员账号"""
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
@@ -249,12 +248,15 @@ def splitter_process():
     
     try:
         df = pd.read_excel(file, sheet_name=sheet_name)
-        if target_qty_col not in df.columns: return jsonify({"success": False, "error": "指定的数量列不存在"}), 400
+        if target_qty_col not in df.columns: 
+            return jsonify({"success": False, "error": "指定的数量列不存在"}), 400
 
+        # 智能识别列
         name_col = next((c for c in df.columns if '名称' in str(c)), selected_cols[0] if selected_cols else df.columns[0])
         unit_col = next((c for c in df.columns if '单位' in str(c)), None)
         price_col = next((c for c in df.columns if '单价' in str(c)), None)
         
+        # 数据清洗
         df = df.dropna(subset=[target_qty_col])
         df[target_qty_col] = pd.to_numeric(df[target_qty_col], errors='coerce')
         df = df[df[target_qty_col] > 0]
@@ -266,6 +268,7 @@ def splitter_process():
             qty = row[target_qty_col]
             if pd.isna(qty): continue
             
+            # 活跃天数逻辑
             if qty <= 3: active_days = 1
             elif qty <= 10: active_days = random.randint(2, min(4, total_days))
             else: active_days = random.randint(3, min(total_days, 10))
@@ -275,13 +278,39 @@ def splitter_process():
             days_indices = sorted(random.sample(range(total_days), len(splits)))
             
             for i, day_idx in enumerate(days_indices):
+                # 复制保留列
                 new_row = {col: row[col] for col in selected_cols if col in row}
-                if target_qty_col in new_row: new_row[target_qty_col] = splits[i]
-                if price_col in row and '含税金额' in selected_cols:
-                    try: new_row['含税金额'] = round(float(row[price_col]) * splits[i], 2)
-                    except: pass
+                
+                # 1. 更新数量
+                current_split_qty = splits[i]
+                if target_qty_col in new_row: 
+                    new_row[target_qty_col] = current_split_qty
+                
+                # 2. 更新金额逻辑 (新增功能)
+                # 只有当原表中有“单价”列时才能计算
+                if price_col and price_col in row:
+                    try:
+                        # 获取单价
+                        unit_price = float(row[price_col])
+                        # 计算新金额 = 单价 * 拆分后数量
+                        new_amount = round(unit_price * current_split_qty, 2)
+                        
+                        # 遍历新行中的所有列，查找需要更新金额的列
+                        # 匹配关键词：金额、价税合计、含税金额、合计
+                        keywords = ['金额', '价税合计', '含税金额', '合计', '小计']
+                        
+                        for col_key in new_row.keys():
+                            # 确保不是单价列本身，且包含关键词
+                            if col_key != price_col and any(k in str(col_key) for k in keywords):
+                                new_row[col_key] = new_amount
+                                
+                    except Exception as calc_err:
+                        # 计算出错时(如单价非数字)跳过金额更新，保留原值或不处理
+                        pass
+                
                 daily_rows[day_idx].append(new_row)
         
+        # 保存文件
         filename = f"拆分_{sheet_name}_{uuid.uuid4().hex[:8]}.xlsx"
         filepath = os.path.join(app.config['RESULT_FOLDER'], filename)
         

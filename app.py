@@ -62,7 +62,6 @@ def load_auth_config():
         return None
 
 # --- CLI 命令 (控制台重置密码) ---
-# 使用方法: docker exec -it <container_id> flask reset-user admin 123456
 @app.cli.command("reset-user")
 @click.argument("username")
 @click.argument("password")
@@ -75,29 +74,15 @@ def reset_user_command(username, password):
 
 @app.before_request
 def auth_middleware():
-    # 静态资源放行
-    if request.path.startswith('/static'):
-        return
-    
-    # 检查系统是否已初始化
+    if request.path.startswith('/static'): return
     config = load_auth_config()
     if not config:
-        if request.endpoint != 'setup':
-            return redirect(url_for('setup'))
+        if request.endpoint != 'setup': return redirect(url_for('setup'))
         return
-
-    # 已初始化但访问 setup，跳转登录
-    if request.endpoint == 'setup':
-        return redirect(url_for('login'))
-
-    # 登录页面放行
-    if request.endpoint in ['login', 'logout']:
-        return
-
-    # 检查登录状态
-    session.permanent = True  # 刷新 Session 超时时间
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
+    if request.endpoint == 'setup': return redirect(url_for('login'))
+    if request.endpoint in ['login', 'logout']: return
+    session.permanent = True
+    if not session.get('logged_in'): return redirect(url_for('login'))
 
 # --- 基础路由 ---
 
@@ -118,7 +103,6 @@ def login():
         username = request.form.get('username')
         password = request.form.get('password')
         config = load_auth_config()
-        
         if config and username == config['username'] and check_password_hash(config['password_hash'], password):
             session['logged_in'] = True
             session['user'] = username
@@ -145,7 +129,6 @@ def splitter_ui():
     return render_template('splitter.html')
 
 def split_smart_algo(total_qty, days, is_int):
-    """拆分算法核心逻辑"""
     if days <= 1: return [total_qty]
     amounts = []
     if is_int:
@@ -171,63 +154,28 @@ def split_smart_algo(total_qty, days, is_int):
 
 @app.route('/api/splitter/analyze', methods=['POST'])
 def splitter_analyze():
-    """
-    分析上传的文件，获取 Sheet 列表和列名。
-    包含修复：自动过滤隐藏的 Sheet。
-    """
     file = request.files.get('file')
     if not file: return jsonify({"error": "未找到文件"}), 400
-    
     try:
-        # 1. 将文件读入内存，防止多次读取导致指针偏移
         file_content = file.read()
         file_bytes = io.BytesIO(file_content)
-        
         visible_sheets = []
         filename = file.filename.lower() if file.filename else ""
-        
-        # 2. 针对 .xlsx 文件，尝试使用 openpyxl 检测隐藏 Sheet
         if filename.endswith('.xlsx'):
             try:
                 from openpyxl import load_workbook
-                # read_only=True 模式加载速度更快
                 wb = load_workbook(file_bytes, read_only=True)
                 for sheet in wb.worksheets:
-                    # sheet_state 默认是 'visible'，隐藏则是 'hidden' 或 'veryHidden'
-                    if sheet.sheet_state == 'visible':
-                        visible_sheets.append(sheet.title)
+                    if sheet.sheet_state == 'visible': visible_sheets.append(sheet.title)
                 wb.close()
-            except Exception as e:
-                print(f"检测隐藏Sheet失败，将显示所有Sheet: {e}")
-                visible_sheets = []
-
-        # 重置文件指针给 Pandas 使用
+            except: visible_sheets = []
         file_bytes.seek(0)
-        
-        # 3. 使用 Pandas 读取所有 Sheet 名称
         xl = pd.ExcelFile(file_bytes)
         all_sheets = xl.sheet_names
-        
-        # 4. 过滤逻辑
-        if visible_sheets:
-            # 取交集：既在 Pandas 能读到的列表里，又是可见的
-            final_sheets = [s for s in all_sheets if s in visible_sheets]
-        else:
-            # 如果不是 xlsx 或检测失败，则显示所有
-            final_sheets = all_sheets
-            
-        # 如果过滤完没东西了，保底显示所有
-        if not final_sheets:
-            final_sheets = all_sheets
-
-        # 5. 读取第一个可见 Sheet 的列名
+        final_sheets = [s for s in all_sheets if s in visible_sheets] if visible_sheets else all_sheets
+        if not final_sheets: final_sheets = all_sheets
         df = xl.parse(final_sheets[0], nrows=10)
-        
-        return jsonify({
-            "sheets": final_sheets, 
-            "columns": df.columns.tolist()
-        })
-        
+        return jsonify({"sheets": final_sheets, "columns": df.columns.tolist()})
     except Exception as e:
         return jsonify({"error": f"解析错误: {str(e)}"}), 500
 
@@ -240,14 +188,14 @@ def splitter_sheet_info():
         columns = df.columns.tolist()
         units = []
         unit_col = next((c for c in columns if '单位' in str(c)), None)
-        if unit_col:
-            units = df[unit_col].dropna().unique().tolist()
+        if unit_col: units = df[unit_col].dropna().unique().tolist()
         return jsonify({"columns": columns, "units": [str(u) for u in units]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/splitter/process', methods=['POST'])
 def splitter_process():
+    # ... 参数获取 ...
     file = request.files.get('file')
     sheet_name = request.form.get('sheet_name')
     target_qty_col = request.form.get('target_qty_col')
@@ -257,9 +205,7 @@ def splitter_process():
     
     try:
         df = pd.read_excel(file, sheet_name=sheet_name)
-        # 简单容错处理
-        if target_qty_col not in df.columns:
-            return "指定的数量列不存在", 400
+        if target_qty_col not in df.columns: return "指定的数量列不存在", 400
 
         name_col = next((c for c in df.columns if '名称' in str(c)), selected_cols[0] if selected_cols else df.columns[0])
         unit_col = next((c for c in df.columns if '单位' in str(c)), None)
@@ -276,33 +222,39 @@ def splitter_process():
             qty = row[target_qty_col]
             if pd.isna(qty): continue
             
-            # 活跃天数逻辑
             if qty <= 3: active_days = 1
             elif qty <= 10: active_days = random.randint(2, min(4, total_days))
             else: active_days = random.randint(3, min(total_days, 10))
             
             is_int = unit in int_units
             splits = split_smart_algo(qty, active_days, is_int)
-            
             days_indices = sorted(random.sample(range(total_days), len(splits)))
             
             for i, day_idx in enumerate(days_indices):
                 new_row = {col: row[col] for col in selected_cols if col in row}
                 if target_qty_col in new_row: new_row[target_qty_col] = splits[i]
                 if price_col in row and '含税金额' in selected_cols:
-                    try:
-                        new_row['含税金额'] = round(float(row[price_col]) * splits[i], 2)
+                    try: new_row['含税金额'] = round(float(row[price_col]) * splits[i], 2)
                     except: pass
                 daily_rows[day_idx].append(new_row)
         
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # --- 修改点：保存到磁盘而不是直接返回流 ---
+        filename = f"拆分_{sheet_name}_{uuid.uuid4().hex[:8]}.xlsx"
+        filepath = os.path.join(app.config['RESULT_FOLDER'], filename)
+        
+        with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
             for i in range(total_days):
                 pd.DataFrame(daily_rows[i]).to_excel(writer, sheet_name=f'第{i+1}天', index=False)
-        output.seek(0)
-        return send_file(output, as_attachment=True, download_name=f"拆分_{sheet_name}.xlsx")
+        
+        return jsonify({"success": True, "filename": filename})
+        
     except Exception as e:
-        return f"发生错误: {str(e)}", 500
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# --- 新增下载路由 ---
+@app.route('/api/splitter/download/<filename>')
+def splitter_download(filename):
+    return send_from_directory(app.config['RESULT_FOLDER'], filename, as_attachment=True)
 
 # ==========================================
 # 模块 B: 进销项比对系统 (Comparator)
@@ -327,12 +279,10 @@ def compare_get_logs():
 def compare_get_headers():
     f = request.files.get('file')
     if not f: return jsonify({})
-    logger.info(f"正在读取文件表头: {f.filename}")
     try:
         df = pd.read_excel(f, nrows=1)
         return jsonify({"columns": df.columns.tolist()})
     except Exception as e:
-        logger.error(f"读取表头失败: {e}")
         return jsonify({"error": str(e)})
 
 @app.route('/api/compare/process', methods=['POST'])
@@ -342,25 +292,18 @@ def compare_process():
         f_out = request.files['file_out']
         m = request.form
         
-        logger.info(">>> 开始比对任务...")
-        logger.info(f"配置映射: 进项[{m['map_in_name']}] <-> 销项[{m['map_out_name']}]")
-
         df_in = pd.read_excel(f_in)
         df_out = pd.read_excel(f_out)
-        logger.info(f"数据加载完成。进项: {len(df_in)} 行, 销项: {len(df_out)} 行")
 
-        # 核心逻辑
         df_in['__key__'] = df_in[m['map_in_name']].apply(clean_name_algo)
         df_out['__key__'] = df_out[m['map_out_name']].apply(clean_name_algo)
         
-        logger.info("正在执行名称清洗与分组聚合...")
         in_agg = df_in.groupby('__key__')[[m['map_in_qty'], m['map_in_val']]].sum().reset_index()
         out_agg = df_out.groupby('__key__')[[m['map_out_qty'], m['map_out_val']]].sum().reset_index()
 
         in_agg.columns = ['关联名称', '进项_数量', '进项_金额']
         out_agg.columns = ['关联名称', '销项_数量', '销项_金额']
 
-        logger.info("正在合并并计算差异...")
         merged = pd.merge(in_agg, out_agg, on='关联名称', how='outer').fillna(0)
         merged['数量差异(销-进)'] = merged['销项_数量'] - merged['进项_数量']
         merged['金额差异(销-进)'] = merged['销项_金额'] - merged['进项_金额']
@@ -368,17 +311,15 @@ def compare_process():
         res_name = f"result_{uuid.uuid4().hex}.xlsx"
         merged.to_excel(os.path.join(app.config['RESULT_FOLDER'], res_name), index=False)
         
-        logger.info(f"SUCCESS: 比对完成。输出结果: {len(merged)} 条记录")
         return jsonify({"success": True, "filename": res_name})
     except Exception as e:
-        logger.error(f"FAILED: 处理过程中发生错误: {str(e)}")
+        logger.error(f"处理失败: {str(e)}")
         return jsonify({"success": False, "message": str(e)})
 
 @app.route('/api/compare/download/<filename>')
 def compare_download(filename):
     display_name = "进销项比对报告.xlsx"
     response = send_from_directory(app.config['RESULT_FOLDER'], filename)
-    # 处理中文文件名下载
     response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(display_name)}"
     return response
 

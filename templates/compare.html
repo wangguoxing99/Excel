@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>进销项智能比对系统 Pro</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; padding: 40px 0; font-family: 'Microsoft YaHei', sans-serif; }
+        .card { border: none; border-radius: 15px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
+        .step-header { background: #eef2ff; padding: 10px 20px; border-radius: 8px; font-weight: bold; color: #4338ca; margin-bottom: 20px; }
+        #logConsole { background: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; font-size: 0.85rem; 
+                      height: 200px; overflow-y: auto; padding: 15px; border-radius: 8px; border: 1px solid #333; }
+        .log-info { color: #4ec9b0; }
+        .log-error { color: #f48771; }
+        .log-warn { color: #ce9178; }
+    </style>
+</head>
+<body>
+<div class="container" style="max-width: 1000px;">
+    <div class="mb-3">
+        <a href="/" class="btn btn-outline-secondary">← 返回主门户</a>
+    </div>
+    <div class="card p-4">
+        <h3 class="text-center mb-4">📊 进销项智能比对系统</h3>
+        <form id="mainForm">
+            <div class="step-header">第一步：上传原始 Excel 文件</div>
+            <div class="row g-4">
+                <div class="col-md-6">
+                    <div class="p-3 border rounded">
+                        <label class="form-label text-primary fw-bold">进项文件 (Input)</label>
+                        <input type="file" class="form-control" name="file_in" id="file_in" required onchange="parseFile('in')">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="p-3 border rounded">
+                        <label class="form-label text-success fw-bold">销项文件 (Output)</label>
+                        <input type="file" class="form-control" name="file_out" id="file_out" required onchange="parseFile('out')">
+                    </div>
+                </div>
+            </div>
+
+            <div id="mappingArea" class="mt-5" style="display:none;">
+                <div class="step-header">第二步：配置差异比对列</div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr><th>对比项</th><th>进项文件列 (IN)</th><th>销项文件列 (OUT)</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td><strong>对比名称 (Key)</strong></td>
+                                <td><select class="form-select" name="map_in_name" id="sel_in_name"></select></td>
+                                <td><select class="form-select" name="map_out_name" id="sel_out_name"></select></td>
+                            </tr>
+                            <tr><td><strong>核算数量</strong></td>
+                                <td><select class="form-select" name="map_in_qty" id="sel_in_qty"></select></td>
+                                <td><select class="form-select" name="map_out_qty" id="sel_out_qty"></select></td>
+                            </tr>
+                            <tr><td><strong>核算金额</strong></td>
+                                <td><select class="form-select" name="map_in_val" id="sel_in_val"></select></td>
+                                <td><select class="form-select" name="map_out_val" id="sel_out_val"></select></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 py-3 mt-3 fw-bold">执行比对任务</button>
+            </div>
+        </form>
+
+        <div class="mt-5">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="fw-bold text-secondary">系统运行日志</span>
+                <button class="btn btn-sm btn-link text-decoration-none" onclick="document.getElementById('logConsole').innerHTML=''">清空日志</button>
+            </div>
+            <div id="logConsole"></div>
+        </div>
+
+        <div id="resultArea" class="mt-4 text-center" style="display:none;">
+            <div class="alert alert-success d-inline-block px-5">✅ 任务处理成功！请点击下方按钮下载报告。</div>
+            <br>
+            <a id="downloadBtn" href="#" class="btn btn-success btn-lg px-5 shadow-sm">下载差异比对报告.xlsx</a>
+        </div>
+    </div>
+</div>
+
+<script>
+// 【修改点】日志轮询路径
+setInterval(async () => {
+    const res = await fetch('/api/compare/get_logs');
+    const logs = await res.json();
+    const consoleEl = document.getElementById('logConsole');
+    if (logs.length > 0) {
+        logs.forEach(log => {
+            const p = document.createElement('div');
+            if (log.includes('ERROR')) p.className = 'log-error';
+            else if (log.includes('WARNING')) p.className = 'log-warn';
+            else p.className = 'log-info';
+            p.textContent = log;
+            consoleEl.appendChild(p);
+        });
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+}, 1000);
+
+async function parseFile(type) {
+    const fileInput = document.getElementById('file_' + type);
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    
+    try {
+        // 【修改点】表头获取路径
+        const response = await fetch('/api/compare/get_headers', { method: 'POST', body: formData });
+        const data = await response.json();
+        if (data.columns) {
+            fillSelects(type, data.columns);
+            checkReady();
+        }
+    } catch (e) { console.error("解析失败", e); }
+}
+
+function fillSelects(type, columns) {
+    const ids = type === 'in' ? ['sel_in_name', 'sel_in_qty', 'sel_in_val'] : ['sel_out_name', 'sel_out_qty', 'sel_out_val'];
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        el.innerHTML = '<option value="">--选择列--</option>';
+        columns.forEach(col => {
+            const opt = document.createElement('option');
+            opt.value = col; opt.textContent = col;
+            el.appendChild(opt);
+        });
+    });
+}
+
+function checkReady() {
+    if (document.getElementById('sel_in_name').options.length > 1 && 
+        document.getElementById('sel_out_name').options.length > 1) {
+        document.getElementById('mappingArea').style.display = 'block';
+    }
+}
+
+document.getElementById('mainForm').onsubmit = async (e) => {
+    e.preventDefault();
+    document.getElementById('resultArea').style.display = 'none';
+    const formData = new FormData(e.target);
+    // 【修改点】处理路径
+    const response = await fetch('/api/compare/process', { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.success) {
+        document.getElementById('resultArea').style.display = 'block';
+        // 【修改点】下载路径
+        document.getElementById('downloadBtn').href = '/api/compare/download/' + data.filename;
+    }
+};
+</script>
+</body>
+</html>

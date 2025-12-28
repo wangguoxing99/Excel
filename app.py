@@ -251,11 +251,23 @@ def splitter_process():
         if target_qty_col not in df.columns: 
             return jsonify({"success": False, "error": "指定的数量列不存在"}), 400
 
-        # 智能识别列
-        name_col = next((c for c in df.columns if '名称' in str(c)), selected_cols[0] if selected_cols else df.columns[0])
         unit_col = next((c for c in df.columns if '单位' in str(c)), None)
-        price_col = next((c for c in df.columns if '单价' in str(c)), None)
         
+        # 1. 识别变量列（需要随数量等比例变化的列）
+        # 关键词：金额, 合计, 税, 重(净重/毛重), 积(体积)
+        variable_keywords = ['金额', '合计', '小计', '税', '重', '积']
+        
+        # 2. 识别静态列（绝对不能变化的列，即便是数字）
+        # 关键词：单价, 价, 代码, ID, 规格, 日期
+        static_keywords = ['单价', '价', '代码', 'id', 'no', '规格', '日期', 'date']
+        
+        def is_variable_col(col_name):
+            # 排除静态关键词
+            if any(k in str(col_name).lower() for k in static_keywords): return False
+            # 包含变量关键词
+            if any(k in str(col_name) for k in variable_keywords): return True
+            return False
+
         # 数据清洗
         df = df.dropna(subset=[target_qty_col])
         df[target_qty_col] = pd.to_numeric(df[target_qty_col], errors='coerce')
@@ -265,52 +277,49 @@ def splitter_process():
         
         for _, row in df.iterrows():
             unit = str(row.get(unit_col, '')) if unit_col else ""
-            qty = row[target_qty_col]
-            if pd.isna(qty): continue
+            original_qty = row[target_qty_col]
+            
+            if pd.isna(original_qty) or original_qty == 0: continue
             
             # 活跃天数逻辑
-            if qty <= 3: active_days = 1
-            elif qty <= 10: active_days = random.randint(2, min(4, total_days))
+            if original_qty <= 3: active_days = 1
+            elif original_qty <= 10: active_days = random.randint(2, min(4, total_days))
             else: active_days = random.randint(3, min(total_days, 10))
             
             is_int = unit in int_units
-            splits = split_smart_algo(qty, active_days, is_int)
+            splits = split_smart_algo(original_qty, active_days, is_int)
             days_indices = sorted(random.sample(range(total_days), len(splits)))
             
             for i, day_idx in enumerate(days_indices):
-                # 复制保留列
-                new_row = {col: row[col] for col in selected_cols if col in row}
-                
-                # 1. 更新数量
                 current_split_qty = splits[i]
-                if target_qty_col in new_row: 
-                    new_row[target_qty_col] = current_split_qty
                 
-                # 2. 更新金额逻辑 (新增功能)
-                # 只有当原表中有“单价”列时才能计算
-                if price_col and price_col in row:
-                    try:
-                        # 获取单价
-                        unit_price = float(row[price_col])
-                        # 计算新金额 = 单价 * 拆分后数量
-                        new_amount = round(unit_price * current_split_qty, 2)
-                        
-                        # 遍历新行中的所有列，查找需要更新金额的列
-                        # 匹配关键词：金额、价税合计、含税金额、合计
-                        keywords = ['金额', '价税合计', '含税金额', '合计', '小计']
-                        
-                        for col_key in new_row.keys():
-                            # 确保不是单价列本身，且包含关键词
-                            if col_key != price_col and any(k in str(col_key) for k in keywords):
-                                new_row[col_key] = new_amount
-                                
-                    except Exception as calc_err:
-                        # 计算出错时(如单价非数字)跳过金额更新，保留原值或不处理
-                        pass
+                # 计算缩放比例 (Ratio)
+                ratio = current_split_qty / original_qty
+                
+                new_row = {}
+                for col in selected_cols:
+                    if col not in row: continue
+                    val = row[col]
+                    
+                    # 1. 如果是数量列本身 -> 替换为拆分值
+                    if col == target_qty_col:
+                        new_row[col] = current_split_qty
+                    
+                    # 2. 如果是数字类型，且判定为“变量列” -> 等比例缩放
+                    elif isinstance(val, (int, float)) and is_variable_col(col):
+                        try:
+                            new_val = float(val) * ratio
+                            # 金额类通常保留2位，重量等可能需要更多，这里统一保留2位，可按需调整
+                            new_row[col] = round(new_val, 2)
+                        except:
+                            new_row[col] = val # 计算失败则保持原样
+                    
+                    # 3. 其他情况（静态列或非数字） -> 保持原样
+                    else:
+                        new_row[col] = val
                 
                 daily_rows[day_idx].append(new_row)
         
-        # 保存文件
         filename = f"拆分_{sheet_name}_{uuid.uuid4().hex[:8]}.xlsx"
         filepath = os.path.join(app.config['RESULT_FOLDER'], filename)
         

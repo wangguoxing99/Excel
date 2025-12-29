@@ -26,15 +26,20 @@ AUTH_FILE = 'auth.json'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['RESULT_FOLDER'], exist_ok=True)
 
-# --- 日志配置 ---
+# --- 日志配置 (修复日志输出) ---
 log_stream = []
 class WebLogHandler(logging.Handler):
     def emit(self, record):
-        log_stream.append(self.format(record))
+        log_entry = self.format(record)
+        log_stream.append(log_entry)
+        # 保留最近 100 条日志
         if len(log_stream) > 100: log_stream.pop(0)
 
 logger = logging.getLogger('web_logger')
 logger.setLevel(logging.INFO)
+# 清除旧的 handler 防止重复
+if logger.hasHandlers():
+    logger.handlers.clear()
 handler = WebLogHandler()
 handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', '%H:%M:%S'))
 logger.addHandler(handler)
@@ -195,10 +200,9 @@ def splitter_sheet_info():
 
 @app.route('/api/splitter/process', methods=['POST'])
 def splitter_process():
-    # 获取参数：A, B, C 列
-    col_a = request.form.get('col_a') # 数量 (必填)
-    col_b = request.form.get('col_b') # 单价 (可选)
-    col_c = request.form.get('col_c') # 金额 (可选)
+    col_a = request.form.get('col_a') 
+    col_b = request.form.get('col_b') 
+    col_c = request.form.get('col_c') 
     
     file = request.files.get('file')
     sheet = request.form.get('sheet_name')
@@ -213,7 +217,6 @@ def splitter_process():
 
         unit_col = next((c for c in df.columns if '单位' in str(c)), None)
         
-        # 清洗数据
         df = df.dropna(subset=[col_a])
         df[col_a] = pd.to_numeric(df[col_a], errors='coerce')
         df = df[df[col_a] > 0]
@@ -225,7 +228,6 @@ def splitter_process():
             orig_qty = row[col_a]
             if pd.isna(orig_qty) or orig_qty == 0: continue
             
-            # 活跃天数逻辑
             if orig_qty <= 3: active = 1
             elif orig_qty <= 10: active = random.randint(2, min(4, days))
             else: active = random.randint(3, min(days, 10))
@@ -242,32 +244,20 @@ def splitter_process():
                     if col not in row: continue
                     val = row[col]
                     
-                    # --- 核心逻辑 A * B = C ---
-                    
-                    # 1. 数量列 (A) -> 直接替换
                     if col == col_a:
                         new_row[col] = new_qty
-                        
-                    # 2. 金额列 (C) -> 尝试 A * B 计算
                     elif col == col_c and col_b and (col_b in row):
                         try:
-                            # 优先使用：新数量 * 原单价
                             price = float(row[col_b])
                             new_row[col] = round(new_qty * price, 2)
                         except:
-                            # 如果单价无效，回退到按比例缩放原金额
                             try: new_row[col] = round(float(val) * ratio, 2)
                             except: new_row[col] = val
-                            
-                    # 3. 其他列 -> 如果是数字且看起来像总量（如重量），按比例缩放
                     elif isinstance(val, (int, float)):
-                        # 排除 B 列（单价）和 ID 类列，防止被误改
                         is_static = (col == col_b) or any(k in str(col).lower() for k in ['id', 'code', 'date', '日期', '单价', '价', '规格'])
                         if not is_static:
-                            try:
-                                new_row[col] = round(float(val) * ratio, 2)
-                            except:
-                                new_row[col] = val
+                            try: new_row[col] = round(float(val) * ratio, 2)
+                            except: new_row[col] = val
                         else:
                             new_row[col] = val
                     else:
@@ -291,7 +281,7 @@ def splitter_process():
 def splitter_download(filename):
     return send_from_directory(app.config['RESULT_FOLDER'], filename, as_attachment=True)
 
-# --- 比对模块 (保持不变) ---
+# --- 比对模块 (修复日志与表头) ---
 @app.route('/tool/compare')
 def compare_ui(): return render_template('compare.html')
 
@@ -299,34 +289,57 @@ def clean_name_algo(text): return re.sub(r'\*.*?\*', '', str(text)).strip() if n
 
 @app.route('/api/compare/get_logs')
 def compare_get_logs():
-    global log_stream
-    logs, log_stream = list(log_stream), []
-    return jsonify(logs)
+    # 返回当前的日志列表副本
+    return jsonify(list(log_stream))
 
 @app.route('/api/compare/get_headers', methods=['POST'])
 def compare_get_headers():
-    try: return jsonify({"columns": pd.read_excel(request.files['file'], nrows=1).columns.tolist()})
-    except Exception as e: return jsonify({"error": str(e)})
+    try: 
+        logger.info(f"正在读取表头: {request.files['file'].filename}")
+        return jsonify({"columns": pd.read_excel(request.files['file'], nrows=1).columns.tolist()})
+    except Exception as e: 
+        logger.error(f"读取表头失败: {e}")
+        return jsonify({"error": str(e)})
 
 @app.route('/api/compare/process', methods=['POST'])
 def compare_process():
     try:
         f_in, f_out = request.files['file_in'], request.files['file_out']
         m = request.form
+        
+        logger.info(f"🚀 开始任务: 进项[{f_in.filename}] vs 销项[{f_out.filename}]")
+        logger.info(f"🔗 映射关系: 进项键[{m['map_in_name']}] <--> 销项键[{m['map_out_name']}]")
+
         df_in, df_out = pd.read_excel(f_in), pd.read_excel(f_out)
+        logger.info(f"📄 文件加载完成: 进项 {len(df_in)} 行, 销项 {len(df_out)} 行")
+
+        # 数据清洗
         df_in['__k'] = df_in[m['map_in_name']].apply(clean_name_algo)
         df_out['__k'] = df_out[m['map_out_name']].apply(clean_name_algo)
+        
+        logger.info("🧹 正在进行数据清洗与聚合...")
         agg_in = df_in.groupby('__k')[[m['map_in_qty'], m['map_in_val']]].sum().reset_index()
         agg_out = df_out.groupby('__k')[[m['map_out_qty'], m['map_out_val']]].sum().reset_index()
-        agg_in.columns = ['Key', 'In_Qty', 'In_Val']
-        agg_out.columns = ['Key', 'Out_Qty', 'Out_Val']
-        res = pd.merge(agg_in, agg_out, on='Key', how='outer').fillna(0)
-        res['Diff_Qty'] = res['Out_Qty'] - res['In_Qty']
-        res['Diff_Val'] = res['Out_Val'] - res['In_Val']
+        
+        # 【关键修复】这里将列名改为中文
+        agg_in.columns = ['关联名称', '进项_数量', '进项_金额']
+        agg_out.columns = ['关联名称', '销项_数量', '销项_金额']
+        
+        logger.info("🔄 正在执行差异比对...")
+        res = pd.merge(agg_in, agg_out, on='关联名称', how='outer').fillna(0)
+        
+        # 【关键修复】输出列名改为中文
+        res['差异_数量'] = res['销项_数量'] - res['进项_数量']
+        res['差异_金额'] = res['销项_金额'] - res['进项_金额']
+        
         fname = f"result_{uuid.uuid4().hex}.xlsx"
         res.to_excel(os.path.join(app.config['RESULT_FOLDER'], fname), index=False)
+        
+        logger.info(f"✅ 比对成功! 结果已生成: {fname}")
         return jsonify({"success": True, "filename": fname})
-    except Exception as e: return jsonify({"success": False, "message": str(e)})
+    except Exception as e: 
+        logger.error(f"❌ 处理失败: {str(e)}")
+        return jsonify({"success": False, "message": str(e)})
 
 @app.route('/api/compare/download/<filename>')
 def compare_download(filename):

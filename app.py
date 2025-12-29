@@ -26,20 +26,18 @@ AUTH_FILE = 'auth.json'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['RESULT_FOLDER'], exist_ok=True)
 
-# --- 日志配置 (修复日志输出) ---
+# --- 日志配置 (修复日志循环问题) ---
 log_stream = []
 class WebLogHandler(logging.Handler):
     def emit(self, record):
         log_entry = self.format(record)
         log_stream.append(log_entry)
-        # 保留最近 100 条日志
-        if len(log_stream) > 100: log_stream.pop(0)
+        # 限制缓冲区大小，防止内存溢出
+        if len(log_stream) > 1000: log_stream.pop(0)
 
 logger = logging.getLogger('web_logger')
 logger.setLevel(logging.INFO)
-# 清除旧的 handler 防止重复
-if logger.hasHandlers():
-    logger.handlers.clear()
+if logger.hasHandlers(): logger.handlers.clear()
 handler = WebLogHandler()
 handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', '%H:%M:%S'))
 logger.addHandler(handler)
@@ -51,7 +49,7 @@ def load_auth_db():
     try:
         with open(AUTH_FILE, 'r') as f:
             data = json.load(f)
-            if "username" in data: # 兼容旧格式
+            if "username" in data: 
                 new_db = {"users": {data["username"]: data["password_hash"]}}
                 save_auth_db(new_db)
                 return new_db
@@ -281,7 +279,7 @@ def splitter_process():
 def splitter_download(filename):
     return send_from_directory(app.config['RESULT_FOLDER'], filename, as_attachment=True)
 
-# --- 比对模块 (修复日志与表头) ---
+# --- 比对模块 ---
 @app.route('/tool/compare')
 def compare_ui(): return render_template('compare.html')
 
@@ -289,8 +287,11 @@ def clean_name_algo(text): return re.sub(r'\*.*?\*', '', str(text)).strip() if n
 
 @app.route('/api/compare/get_logs')
 def compare_get_logs():
-    # 返回当前的日志列表副本
-    return jsonify(list(log_stream))
+    global log_stream
+    # 【修复1】取出日志后立即清空，防止前端循环重复显示
+    logs = list(log_stream)
+    log_stream.clear()
+    return jsonify(logs)
 
 @app.route('/api/compare/get_headers', methods=['POST'])
 def compare_get_headers():
@@ -308,7 +309,7 @@ def compare_process():
         m = request.form
         
         logger.info(f"🚀 开始任务: 进项[{f_in.filename}] vs 销项[{f_out.filename}]")
-        logger.info(f"🔗 映射关系: 进项键[{m['map_in_name']}] <--> 销项键[{m['map_out_name']}]")
+        logger.info(f"🔗 映射关系: 进项[{m['map_in_name']}] <--> 销项[{m['map_out_name']}]")
 
         df_in, df_out = pd.read_excel(f_in), pd.read_excel(f_out)
         logger.info(f"📄 文件加载完成: 进项 {len(df_in)} 行, 销项 {len(df_out)} 行")
@@ -321,14 +322,16 @@ def compare_process():
         agg_in = df_in.groupby('__k')[[m['map_in_qty'], m['map_in_val']]].sum().reset_index()
         agg_out = df_out.groupby('__k')[[m['map_out_qty'], m['map_out_val']]].sum().reset_index()
         
-        # 【关键修复】这里将列名改为中文
-        agg_in.columns = ['关联名称', '进项_数量', '进项_金额']
-        agg_out.columns = ['关联名称', '销项_数量', '销项_金额']
+        # 【修复2】动态设置 Key 列名，保留用户选择的原表头名称
+        # 使用“进项名称列”作为最终结果的 Key 列名
+        key_col_name = m['map_in_name']
+        
+        agg_in.columns = [key_col_name, '进项_数量', '进项_金额']
+        agg_out.columns = [key_col_name, '销项_数量', '销项_金额']
         
         logger.info("🔄 正在执行差异比对...")
-        res = pd.merge(agg_in, agg_out, on='关联名称', how='outer').fillna(0)
+        res = pd.merge(agg_in, agg_out, on=key_col_name, how='outer').fillna(0)
         
-        # 【关键修复】输出列名改为中文
         res['差异_数量'] = res['销项_数量'] - res['进项_数量']
         res['差异_金额'] = res['销项_金额'] - res['进项_金额']
         
